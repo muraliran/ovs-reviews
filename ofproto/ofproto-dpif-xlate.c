@@ -1405,7 +1405,7 @@ group_is_alive(const struct xlate_ctx *ctx, uint32_t group_id, int depth)
 
 static bool
 bucket_is_alive(const struct xlate_ctx *ctx,
-                struct ofputil_bucket *bucket, int depth)
+                const struct ofputil_bucket *bucket, int depth)
 {
     if (depth >= MAX_LIVENESS_RECURSION) {
         static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 1);
@@ -1426,11 +1426,12 @@ static struct ofputil_bucket *
 group_first_live_bucket(const struct xlate_ctx *ctx,
                         const struct group_dpif *group, int depth)
 {
-    struct ofputil_bucket *bucket;
-    const struct ovs_list *buckets;
+    struct ofputil_bucket *buckets;
+    size_t n_buckets;
 
-    group_dpif_get_buckets(group, &buckets);
-    LIST_FOR_EACH (bucket, list_node, buckets) {
+    group_dpif_get_buckets(group, &buckets, &n_buckets);
+    for (size_t i = 0; i < n_buckets; i++) {
+        struct ofputil_bucket *bucket = &buckets[i];
         if (bucket_is_alive(ctx, bucket, depth)) {
             return bucket;
         }
@@ -1448,11 +1449,12 @@ group_best_live_bucket(const struct xlate_ctx *ctx,
     uint32_t best_score = 0;
     int i = 0;
 
-    struct ofputil_bucket *bucket;
-    const struct ovs_list *buckets;
+    struct ofputil_bucket *buckets;
+    size_t n_buckets;
 
-    group_dpif_get_buckets(group, &buckets);
-    LIST_FOR_EACH (bucket, list_node, buckets) {
+    group_dpif_get_buckets(group, &buckets, &n_buckets);
+    for (struct ofputil_bucket *bucket = buckets;
+         bucket < &buckets[n_buckets]; bucket++) {
         if (bucket_is_alive(ctx, bucket, 0)) {
             uint32_t score = (hash_int(i, basis) & 0xffff) * bucket->weight;
             if (score >= best_score) {
@@ -3263,13 +3265,12 @@ xlate_group_bucket(struct xlate_ctx *ctx, struct ofputil_bucket *bucket)
 static void
 xlate_all_group(struct xlate_ctx *ctx, struct group_dpif *group)
 {
-    struct ofputil_bucket *bucket;
-    const struct ovs_list *buckets;
+    struct ofputil_bucket *buckets;
+    size_t n_buckets;
+    group_dpif_get_buckets(group, &buckets, &n_buckets);
 
-    group_dpif_get_buckets(group, &buckets);
-
-    LIST_FOR_EACH (bucket, list_node, buckets) {
-        xlate_group_bucket(ctx, bucket);
+    for (size_t i = 0; i < n_buckets; i++) {
+        xlate_group_bucket(ctx, &buckets[i]);
     }
     xlate_group_stats(ctx, group, NULL);
 }

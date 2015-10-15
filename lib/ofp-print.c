@@ -2337,12 +2337,10 @@ ofp_print_bucket_id(struct ds *s, const char *label, uint32_t bucket_id,
 
 static void
 ofp_print_group(struct ds *s, uint32_t group_id, uint8_t type,
-                const struct ovs_list *p_buckets,
+                const struct ofputil_bucket *buckets, size_t n_buckets,
                 const struct ofputil_group_props *props,
                 enum ofp_version ofp_version, bool suppress_type)
 {
-    struct ofputil_bucket *bucket;
-
     ds_put_format(s, "group_id=%"PRIu32, group_id);
 
     if (!suppress_type) {
@@ -2371,13 +2369,14 @@ ofp_print_group(struct ds *s, uint32_t group_id, uint8_t type,
         }
     }
 
-    if (!p_buckets) {
+    if (!n_buckets) {
         return;
     }
 
     ds_put_char(s, ',');
 
-    LIST_FOR_EACH (bucket, list_node, p_buckets) {
+    for (const struct ofputil_bucket *bucket = buckets;
+         bucket < &buckets[n_buckets]; bucket++) {
         ds_put_cstr(s, "bucket=");
 
         ofp_print_bucket_id(s, "bucket_id:", bucket->bucket_id, ofp_version);
@@ -2428,9 +2427,9 @@ ofp_print_group_desc(struct ds *s, const struct ofp_header *oh)
 
         ds_put_char(s, '\n');
         ds_put_char(s, ' ');
-        ofp_print_group(s, gd.group_id, gd.type, &gd.buckets, &gd.props,
-                        oh->version, false);
-        ofputil_bucket_list_destroy(&gd.buckets);
+        ofp_print_group(s, gd.group_id, gd.type, gd.buckets, gd.n_buckets,
+                        &gd.props, oh->version, false);
+        ofputil_buckets_destroy(gd.buckets, gd.n_buckets);
      }
 }
 
@@ -2575,8 +2574,8 @@ ofp_print_group_mod__(struct ds *s, enum ofp_version ofp_version,
                             gm->command_bucket_id, ofp_version);
     }
 
-    ofp_print_group(s, gm->group_id, gm->type, &gm->buckets, &gm->props,
-                    ofp_version, bucket_command);
+    ofp_print_group(s, gm->group_id, gm->type, gm->buckets, gm->n_buckets,
+                    &gm->props, ofp_version, bucket_command);
 }
 
 static void
@@ -2591,7 +2590,7 @@ ofp_print_group_mod(struct ds *s, const struct ofp_header *oh)
         return;
     }
     ofp_print_group_mod__(s, oh->version, &gm);
-    ofputil_bucket_list_destroy(&gm.buckets);
+    ofputil_buckets_destroy(gm.buckets, gm.n_buckets);
 }
 
 static void

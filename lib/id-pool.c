@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014 Nicira, Inc.
+ * Copyright (c) 2014, 2015 Nicira, Inc.
  * Copyright (c) 2014 Netronome.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -35,7 +35,7 @@ struct id_pool {
 static void id_pool_init(struct id_pool *pool,
                          uint32_t base, uint32_t n_ids);
 static void id_pool_uninit(struct id_pool *pool);
-static struct id_node *id_pool_find(struct id_pool *pool, uint32_t id);
+static struct id_node *id_pool_find(const struct id_pool *pool, uint32_t id);
 
 struct id_pool *
 id_pool_create(uint32_t base, uint32_t n_ids)
@@ -80,7 +80,7 @@ id_pool_uninit(struct id_pool *pool)
 }
 
 static struct id_node *
-id_pool_find(struct id_pool *pool, uint32_t id)
+id_pool_find(const struct id_pool *pool, uint32_t id)
 {
     size_t hash;
     struct id_node *id_node;
@@ -88,7 +88,7 @@ id_pool_find(struct id_pool *pool, uint32_t id)
     hash = hash_int(id, 0);
     HMAP_FOR_EACH_WITH_HASH(id_node, node, hash, &pool->map) {
         if (id == id_node->id) {
-            return id_node;
+            return CONST_CAST(struct id_node *, id_node);
         }
     }
     return NULL;
@@ -152,4 +152,10 @@ id_pool_free_id(struct id_pool *pool, uint32_t id)
             free(id_node);
         }
     }
+}
+
+bool
+id_pool_contains(const struct id_pool *pool, uint32_t id)
+{
+    return id_pool_find(pool, id) != NULL;
 }

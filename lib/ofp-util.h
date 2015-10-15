@@ -1044,7 +1044,6 @@ struct bucket_counter {
 
 /* Bucket for use in groups. */
 struct ofputil_bucket {
-    struct ovs_list list_node;
     uint16_t weight;            /* Relative weight, for "select" groups. */
     ofp_port_t watch_port;      /* Port whose state affects whether this bucket
                                  * is live. Only required for fast failover
@@ -1076,8 +1075,11 @@ struct ofputil_group_mod {
                                    * OFPGC15_INSERT_BUCKET and
                                    * OFPGC15_REMOVE_BUCKET commands
                                    * execution.*/
-    struct ovs_list buckets;      /* Contains "struct ofputil_bucket"s. */
     struct ofputil_group_props props; /* Group properties. */
+
+    /* Buckets. */
+    struct ofputil_bucket *buckets;
+    size_t n_buckets;
 };
 
 /* Group stats reply, independent of protocol. */
@@ -1106,19 +1108,22 @@ struct ofputil_group_features {
 struct ofputil_group_desc {
     uint8_t type;               /* One of OFPGT_*. */
     uint32_t group_id;          /* Group identifier. */
-    struct ovs_list buckets;    /* Contains "struct ofputil_bucket"s. */
     struct ofputil_group_props props; /* Group properties. */
+
+    /* Buckets. */
+    struct ofputil_bucket *buckets;
+    size_t n_buckets;
 };
 
-void ofputil_bucket_list_destroy(struct ovs_list *buckets);
+void ofputil_buckets_destroy(struct ofputil_bucket[], size_t n_buckets);
 void ofputil_bucket_clone_list(struct ovs_list *dest,
                                const struct ovs_list *src,
                                const struct ofputil_bucket *);
-struct ofputil_bucket *ofputil_bucket_find(const struct ovs_list *,
+struct ofputil_bucket *ofputil_bucket_find(const struct ofputil_bucket[],
+                                           size_t n_buckets,
                                            uint32_t bucket_id);
-bool ofputil_bucket_check_duplicate_id(const struct ovs_list *);
-struct ofputil_bucket *ofputil_bucket_list_front(const struct ovs_list *);
-struct ofputil_bucket *ofputil_bucket_list_back(const struct ovs_list *);
+bool ofputil_buckets_contain_duplicate(const struct ofputil_bucket[],
+                                       size_t n_buckets);
 
 static inline bool
 ofputil_bucket_has_liveness(const struct ofputil_bucket *bucket)
@@ -1157,7 +1162,8 @@ int ofputil_decode_group_desc_reply(struct ofputil_group_desc *,
                                     struct ofpbuf *, enum ofp_version);
 
 void ofputil_append_group_desc_reply(const struct ofputil_group_desc *,
-                                     const struct ovs_list *buckets,
+                                     const struct ofputil_bucket buckets[],
+                                     size_t n_buckets,
                                      struct ovs_list *replies);
 
 struct ofputil_bundle_ctrl_msg {

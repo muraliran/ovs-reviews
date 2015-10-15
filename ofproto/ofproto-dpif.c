@@ -4175,16 +4175,15 @@ static void
 group_construct_stats(struct group_dpif *group)
     OVS_REQUIRES(group->stats_mutex)
 {
-    struct ofputil_bucket *bucket;
-    const struct ovs_list *buckets;
-
     group->packet_count = 0;
     group->byte_count = 0;
 
-    group_dpif_get_buckets(group, &buckets);
-    LIST_FOR_EACH (bucket, list_node, buckets) {
-        bucket->stats.packet_count = 0;
-        bucket->stats.byte_count = 0;
+    struct ofputil_bucket *buckets;
+    size_t n_buckets;
+    group_dpif_get_buckets(group, &buckets, &n_buckets);
+    for (struct ofputil_bucket *b = buckets; b < &buckets[n_buckets]; b++) {
+        b->stats.packet_count = 0;
+        b->stats.byte_count = 0;
     }
 }
 
@@ -4200,10 +4199,12 @@ group_dpif_credit_stats(struct group_dpif *group,
         bucket->stats.packet_count += stats->n_packets;
         bucket->stats.byte_count += stats->n_bytes;
     } else { /* Credit to all buckets */
-        const struct ovs_list *buckets;
+        struct ofputil_bucket *buckets;
+        size_t n_buckets;
 
-        group_dpif_get_buckets(group, &buckets);
-        LIST_FOR_EACH (bucket, list_node, buckets) {
+        group_dpif_get_buckets(group, &buckets, &n_buckets);
+        for (struct ofputil_bucket *bucket = buckets;
+             bucket < &buckets[n_buckets]; bucket++) {
             bucket->stats.packet_count += stats->n_packets;
             bucket->stats.byte_count += stats->n_bytes;
         }
@@ -4244,17 +4245,17 @@ static enum ofperr
 group_get_stats(const struct ofgroup *group_, struct ofputil_group_stats *ogs)
 {
     struct group_dpif *group = group_dpif_cast(group_);
-    struct ofputil_bucket *bucket;
-    const struct ovs_list *buckets;
-    struct bucket_counter *bucket_stats;
 
     ovs_mutex_lock(&group->stats_mutex);
     ogs->packet_count = group->packet_count;
     ogs->byte_count = group->byte_count;
 
-    group_dpif_get_buckets(group, &buckets);
-    bucket_stats = ogs->bucket_stats;
-    LIST_FOR_EACH (bucket, list_node, buckets) {
+    struct bucket_counter *bucket_stats = ogs->bucket_stats;
+    struct ofputil_bucket *buckets;
+    size_t n_buckets;
+    group_dpif_get_buckets(group, &buckets, &n_buckets);
+    for (const struct ofputil_bucket *bucket = buckets;
+         bucket < &buckets[n_buckets]; bucket++) {
         bucket_stats->packet_count = bucket->stats.packet_count;
         bucket_stats->byte_count = bucket->stats.byte_count;
         bucket_stats++;
@@ -4283,9 +4284,10 @@ group_dpif_lookup(struct ofproto_dpif *ofproto, uint32_t group_id,
 
 void
 group_dpif_get_buckets(const struct group_dpif *group,
-                       const struct ovs_list **buckets)
+                       struct ofputil_bucket **bucketsp, size_t *n_bucketsp)
 {
-    *buckets = &group->up.buckets;
+    *bucketsp = group->up.buckets;
+    *n_bucketsp = group->up.n_buckets;
 }
 
 enum ofp11_group_type

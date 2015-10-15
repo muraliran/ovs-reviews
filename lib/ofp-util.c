@@ -7175,118 +7175,59 @@ ofputil_decode_port_stats_request(const struct ofp_header *request,
     }
 }
 
-/* Frees all of the "struct ofputil_bucket"s in the 'buckets' list. */
+/* Frees all 'n_buckets' of the "struct ofputil_bucket"s in 'buckets', then
+ * 'buckets' itself. */
 void
-ofputil_bucket_list_destroy(struct ovs_list *buckets)
+ofputil_buckets_destroy(struct ofputil_bucket *buckets, size_t n_buckets)
 {
-    struct ofputil_bucket *bucket;
-
-    LIST_FOR_EACH_POP (bucket, list_node, buckets) {
-        free(bucket->ofpacts);
-        free(bucket);
+    for (size_t i = 0; i < n_buckets; i++) {
+        free(buckets[i].ofpacts);
     }
+    free(buckets);
 }
 
-/* Clones 'bucket' and its ofpacts data */
-static struct ofputil_bucket *
-ofputil_bucket_clone_data(const struct ofputil_bucket *bucket)
-{
-    struct ofputil_bucket *new;
-
-    new = xmemdup(bucket, sizeof *bucket);
-    new->ofpacts = xmemdup(bucket->ofpacts, bucket->ofpacts_len);
-
-    return new;
-}
-
-/* Clones each of the buckets in the list 'src' appending them
- * in turn to 'dest' which should be an initialised list.
- * An exception is that if the pointer value of a bucket in 'src'
- * matches 'skip' then it is not cloned or appended to 'dest'.
- * This allows all of 'src' or 'all of 'src' except 'skip' to
- * be cloned and appended to 'dest'. */
-void
-ofputil_bucket_clone_list(struct ovs_list *dest, const struct ovs_list *src,
-                          const struct ofputil_bucket *skip)
-{
-    struct ofputil_bucket *bucket;
-
-    LIST_FOR_EACH (bucket, list_node, src) {
-        struct ofputil_bucket *new_bucket;
-
-        if (bucket == skip) {
-            continue;
-        }
-
-        new_bucket = ofputil_bucket_clone_data(bucket);
-        list_push_back(dest, &new_bucket->list_node);
-    }
-}
-
-/* Find a bucket in the list 'buckets' whose bucket id is 'bucket_id'
- * Returns the first bucket found or NULL if no buckets are found. */
+/* Find a bucket in the array 'buckets', which contains 'n_buckets' elements,
+ * whose bucket id is 'bucket_id'.  Returns the first bucket found or NULL if
+ * no such bucket is found. */
 struct ofputil_bucket *
-ofputil_bucket_find(const struct ovs_list *buckets, uint32_t bucket_id)
+ofputil_bucket_find(const struct ofputil_bucket buckets[], size_t n_buckets,
+                    uint32_t bucket_id)
 {
-    struct ofputil_bucket *bucket;
-
     if (bucket_id > OFPG15_BUCKET_MAX) {
         return NULL;
     }
 
-    LIST_FOR_EACH (bucket, list_node, buckets) {
+    for (const struct ofputil_bucket *bucket = buckets;
+         bucket < &buckets[n_buckets]; bucket++) {
         if (bucket->bucket_id == bucket_id) {
-            return bucket;
+            return CONST_CAST(struct ofputil_bucket *, bucket);
         }
     }
 
     return NULL;
 }
 
-/* Returns true if more than one bucket in the list 'buckets'
- * have the same bucket id. Returns false otherwise. */
 bool
-ofputil_bucket_check_duplicate_id(const struct ovs_list *buckets)
+ofputil_buckets_contain_duplicate(const struct ofputil_bucket buckets[],
+                                  size_t n_buckets)
 {
-    struct ofputil_bucket *i, *j;
-
-    LIST_FOR_EACH (i, list_node, buckets) {
-        LIST_FOR_EACH_REVERSE (j, list_node, buckets) {
-            if (i == j) {
-                break;
-            }
-            if (i->bucket_id == j->bucket_id) {
-                return true;
-            }
-        }
+    if (n_buckets < 2) {
+        return false;
     }
 
+    struct id_pool *pool = id_pool_create(0, 0);
+    for (const struct ofputil_bucket *b = buckets;
+         b < &buckets[n_buckets]; b++) {
+        if (id_pool_contains(pool, b->bucket_id)) {
+            id_pool_destroy(pool);
+            return true;
+        }
+        id_pool_add(pool, b->bucket_id);
+    }
+    id_pool_destroy(pool);
     return false;
 }
 
-/* Returns the bucket at the front of the list 'buckets'.
- * Undefined if 'buckets is empty. */
-struct ofputil_bucket *
-ofputil_bucket_list_front(const struct ovs_list *buckets)
-{
-    static struct ofputil_bucket *bucket;
-
-    ASSIGN_CONTAINER(bucket, list_front(buckets), list_node);
-
-    return bucket;
-}
-
-/* Returns the bucket at the back of the list 'buckets'.
- * Undefined if 'buckets is empty. */
-struct ofputil_bucket *
-ofputil_bucket_list_back(const struct ovs_list *buckets)
-{
-    static struct ofputil_bucket *bucket;
-
-    ASSIGN_CONTAINER(bucket, list_back(buckets), list_node);
-
-    return bucket;
-}
 
 /* Returns an OpenFlow group stats request for OpenFlow version 'ofp_version',
  * that requests stats for group 'group_id'.  (Use OFPG_ALL to request stats
@@ -7324,7 +7265,7 @@ ofputil_encode_group_stats_request(enum ofp_version ofp_version,
 void
 ofputil_uninit_group_desc(struct ofputil_group_desc *gd)
 {
-    ofputil_bucket_list_destroy(&gd->buckets);
+    ofputil_buckets_destroy(gd->buckets, gd->n_buckets);
     free(&gd->props.fields);
 }
 
@@ -7742,19 +7683,19 @@ ofputil_put_group_prop_ntr_selection_method(enum ofp_version ofp_version,
 
 static void
 ofputil_append_ofp11_group_desc_reply(const struct ofputil_group_desc *gds,
-                                      const struct ovs_list *buckets,
+                                      const struct ofputil_bucket buckets[],
+                                      size_t n_buckets,
                                       struct ovs_list *replies,
                                       enum ofp_version version)
 {
     struct ofpbuf *reply = ofpbuf_from_list(list_back(replies));
     struct ofp11_group_desc_stats *ogds;
-    struct ofputil_bucket *bucket;
     size_t start_ogds;
 
     start_ogds = reply->size;
     ofpbuf_put_zeros(reply, sizeof *ogds);
-    LIST_FOR_EACH (bucket, list_node, buckets) {
-        ofputil_put_ofp11_bucket(bucket, reply, version);
+    for (size_t i = 0; i < n_buckets; i++) {
+        ofputil_put_ofp11_bucket(&buckets[i], reply, version);
     }
     ogds = ofpbuf_at_assert(reply, start_ogds, sizeof *ogds);
     ogds->length = htons(reply->size - start_ogds);
@@ -7766,20 +7707,20 @@ ofputil_append_ofp11_group_desc_reply(const struct ofputil_group_desc *gds,
 
 static void
 ofputil_append_ofp15_group_desc_reply(const struct ofputil_group_desc *gds,
-                                      const struct ovs_list *buckets,
+                                      const struct ofputil_bucket buckets[],
+                                      size_t n_buckets,
                                       struct ovs_list *replies,
                                       enum ofp_version version)
 {
     struct ofpbuf *reply = ofpbuf_from_list(list_back(replies));
     struct ofp15_group_desc_stats *ogds;
-    struct ofputil_bucket *bucket;
     size_t start_ogds, start_buckets;
 
     start_ogds = reply->size;
     ofpbuf_put_zeros(reply, sizeof *ogds);
     start_buckets = reply->size;
-    LIST_FOR_EACH (bucket, list_node, buckets) {
-        ofputil_put_ofp15_bucket(bucket, bucket->bucket_id,
+    for (size_t i = 0; i < n_buckets; i++) {
+        ofputil_put_ofp15_bucket(&buckets[i], buckets[i].bucket_id,
                                  gds->type, reply, version);
     }
     ogds = ofpbuf_at_assert(reply, start_ogds, sizeof *ogds);
@@ -7802,8 +7743,8 @@ ofputil_append_ofp15_group_desc_reply(const struct ofputil_group_desc *gds,
  * initialized with ofpmp_init(). */
 void
 ofputil_append_group_desc_reply(const struct ofputil_group_desc *gds,
-                                const struct ovs_list *buckets,
-                                struct ovs_list *replies)
+                                const struct ofputil_bucket buckets[],
+                                size_t n_buckets, struct ovs_list *replies)
 {
     enum ofp_version version = ofpmp_version(replies);
 
@@ -7813,11 +7754,13 @@ ofputil_append_group_desc_reply(const struct ofputil_group_desc *gds,
     case OFP12_VERSION:
     case OFP13_VERSION:
     case OFP14_VERSION:
-        ofputil_append_ofp11_group_desc_reply(gds, buckets, replies, version);
+        ofputil_append_ofp11_group_desc_reply(gds, buckets, n_buckets,
+                                              replies, version);
         break;
 
     case OFP15_VERSION:
-        ofputil_append_ofp15_group_desc_reply(gds, buckets, replies, version);
+        ofputil_append_ofp15_group_desc_reply(gds, buckets, n_buckets,
+                                              replies, version);
         break;
 
     case OFP10_VERSION:
@@ -7828,14 +7771,21 @@ ofputil_append_group_desc_reply(const struct ofputil_group_desc *gds,
 
 static enum ofperr
 ofputil_pull_ofp11_buckets(struct ofpbuf *msg, size_t buckets_length,
-                           enum ofp_version version, struct ovs_list *buckets)
+                           enum ofp_version version,
+                           struct ofputil_bucket **bucketsp,
+                           size_t *n_bucketsp)
 {
-    struct ofp11_bucket *ob;
+    struct ofputil_bucket *buckets = NULL;
+    size_t allocated_buckets = 0;
+    size_t n_buckets = 0;
+
     uint32_t bucket_id = 0;
 
-    list_init(buckets);
+    *bucketsp = NULL;
+    *n_bucketsp = 0;
     while (buckets_length > 0) {
         struct ofputil_bucket *bucket;
+        struct ofp11_bucket *ob;
         struct ofpbuf ofpacts;
         enum ofperr error;
         size_t ob_len;
@@ -7867,16 +7817,19 @@ ofputil_pull_ofp11_buckets(struct ofpbuf *msg, size_t buckets_length,
                                               version, &ofpacts);
         if (error) {
             ofpbuf_uninit(&ofpacts);
-            ofputil_bucket_list_destroy(buckets);
+            ofputil_buckets_destroy(buckets, n_buckets);
             return error;
         }
 
-        bucket = xzalloc(sizeof *bucket);
+        if (allocated_buckets >= n_buckets) {
+            buckets = x2nrealloc(buckets, &allocated_buckets, sizeof *buckets);
+        }
+        bucket = &buckets[n_buckets++];
         bucket->weight = ntohs(ob->weight);
         error = ofputil_port_from_ofp11(ob->watch_port, &bucket->watch_port);
         if (error) {
             ofpbuf_uninit(&ofpacts);
-            ofputil_bucket_list_destroy(buckets);
+            ofputil_buckets_destroy(buckets, n_buckets);
             return OFPERR_OFPGMFC_BAD_WATCH;
         }
         bucket->watch_group = ntohl(ob->watch_group);
@@ -7884,8 +7837,10 @@ ofputil_pull_ofp11_buckets(struct ofpbuf *msg, size_t buckets_length,
 
         bucket->ofpacts = ofpbuf_steal_data(&ofpacts);
         bucket->ofpacts_len = ofpacts.size;
-        list_push_back(buckets, &bucket->list_node);
     }
+
+    *bucketsp = buckets;
+    *n_bucketsp = n_buckets;
 
     return 0;
 }
@@ -7927,13 +7882,17 @@ parse_ofp15_group_bucket_prop_watch(const struct ofpbuf *payload,
 static enum ofperr
 ofputil_pull_ofp15_buckets(struct ofpbuf *msg, size_t buckets_length,
                            enum ofp_version version, uint8_t group_type,
-                           struct ovs_list *buckets)
+                           struct ofputil_bucket **bucketsp,
+                           size_t *n_bucketsp)
 {
+    struct ofputil_bucket *buckets;
+    size_t n_buckets, allocated_buckets;
+
     struct ofp15_bucket *ob;
 
-    list_init(buckets);
+    buckets = NULL;
+    n_buckets = allocated_buckets = 0;
     while (buckets_length > 0) {
-        struct ofputil_bucket *bucket = NULL;
         struct ofpbuf ofpacts;
         enum ofperr err = OFPERR_OFPGMFC_BAD_BUCKET;
         struct ofpbuf properties;
@@ -8018,7 +7977,11 @@ ofputil_pull_ofp15_buckets(struct ofpbuf *msg, size_t buckets_length,
             }
         }
 
-        bucket = xzalloc(sizeof *bucket);
+        if (n_buckets >= allocated_buckets) {
+            buckets = x2nrealloc(buckets, &allocated_buckets,
+                                 sizeof *buckets);
+        }
+        struct ofputil_bucket *bucket = &buckets[n_buckets++];
 
         bucket->weight = ntohs(weight);
         err = ofputil_port_from_ofp11(watch_port, &bucket->watch_port);
@@ -8037,22 +8000,23 @@ ofputil_pull_ofp15_buckets(struct ofpbuf *msg, size_t buckets_length,
 
         bucket->ofpacts = ofpbuf_steal_data(&ofpacts);
         bucket->ofpacts_len = ofpacts.size;
-        list_push_back(buckets, &bucket->list_node);
 
         continue;
 
     err:
-        free(bucket);
         ofpbuf_uninit(&ofpacts);
-        ofputil_bucket_list_destroy(buckets);
+        ofputil_buckets_destroy(buckets, n_buckets);
         return err;
     }
 
-    if (ofputil_bucket_check_duplicate_id(buckets)) {
+    if (ofputil_buckets_contain_duplicate(buckets, n_buckets)) {
         VLOG_WARN_RL(&bad_ofmsg_rl, "Duplicate bucket id");
-        ofputil_bucket_list_destroy(buckets);
+        ofputil_buckets_destroy(buckets, n_buckets);
         return OFPERR_OFPGMFC_BAD_BUCKET;
     }
+
+    *bucketsp = buckets;
+    *n_bucketsp = n_buckets;
 
     return 0;
 }
@@ -8281,7 +8245,7 @@ ofputil_decode_ofp11_group_desc_reply(struct ofputil_group_desc *gd,
     }
 
     return ofputil_pull_ofp11_buckets(msg, length - sizeof *ogds, version,
-                                      &gd->buckets);
+                                      &gd->buckets, &gd->n_buckets);
 }
 
 static int
@@ -8324,7 +8288,7 @@ ofputil_decode_ofp15_group_desc_reply(struct ofputil_group_desc *gd,
         return OFPERR_OFPBRC_BAD_LEN;
     }
     error = ofputil_pull_ofp15_buckets(msg, bucket_list_len, version, gd->type,
-                                       &gd->buckets);
+                                       &gd->buckets, &gd->n_buckets);
     if (error) {
         return error;
     }
@@ -8377,7 +8341,7 @@ ofputil_decode_group_desc_reply(struct ofputil_group_desc *gd,
 void
 ofputil_uninit_group_mod(struct ofputil_group_mod *gm)
 {
-    ofputil_bucket_list_destroy(&gm->buckets);
+    ofputil_buckets_destroy(gm->buckets, gm->n_buckets);
 }
 
 static struct ofpbuf *
@@ -8387,14 +8351,13 @@ ofputil_encode_ofp11_group_mod(enum ofp_version ofp_version,
     struct ofpbuf *b;
     struct ofp11_group_mod *ogm;
     size_t start_ogm;
-    struct ofputil_bucket *bucket;
 
     b = ofpraw_alloc(OFPRAW_OFPT11_GROUP_MOD, ofp_version, 0);
     start_ogm = b->size;
     ofpbuf_put_zeros(b, sizeof *ogm);
 
-    LIST_FOR_EACH (bucket, list_node, &gm->buckets) {
-        ofputil_put_ofp11_bucket(bucket, b, ofp_version);
+    for (size_t i = 0; i < gm->n_buckets; i++) {
+        ofputil_put_ofp11_bucket(&gm->buckets[i], b, ofp_version);
     }
     ogm = ofpbuf_at_assert(b, start_ogm, sizeof *ogm);
     ogm->command = htons(gm->command);
@@ -8411,31 +8374,27 @@ ofputil_encode_ofp15_group_mod(enum ofp_version ofp_version,
     struct ofpbuf *b;
     struct ofp15_group_mod *ogm;
     size_t start_ogm;
-    struct ofputil_bucket *bucket;
     struct id_pool *bucket_ids = NULL;
 
     b = ofpraw_alloc(OFPRAW_OFPT15_GROUP_MOD, ofp_version, 0);
     start_ogm = b->size;
     ofpbuf_put_zeros(b, sizeof *ogm);
 
-    LIST_FOR_EACH (bucket, list_node, &gm->buckets) {
+    for (const struct ofputil_bucket *bucket = gm->buckets;
+         bucket < &gm->buckets[gm->n_buckets]; bucket++) {
         uint32_t bucket_id;
 
         /* Generate a bucket id if none was supplied */
         if (bucket->bucket_id > OFPG15_BUCKET_MAX) {
             if (!bucket_ids) {
-                const struct ofputil_bucket *bkt;
-
                 bucket_ids = id_pool_create(0, OFPG15_BUCKET_MAX + 1);
 
                 /* Mark all bucket_ids that are present in gm
                  * as used in the pool. */
-                LIST_FOR_EACH_REVERSE (bkt, list_node, &gm->buckets) {
-                    if (bkt == bucket) {
-                        break;
-                    }
-                    if (bkt->bucket_id <= OFPG15_BUCKET_MAX) {
-                        id_pool_add(bucket_ids, bkt->bucket_id);
+                for (const struct ofputil_bucket *b = gm->buckets;
+                     b < &gm->buckets[gm->n_buckets]; b++) {
+                    if (b->bucket_id <= OFPG15_BUCKET_MAX) {
+                        id_pool_add(bucket_ids, b->bucket_id);
                     }
                 }
             }
@@ -8562,13 +8521,13 @@ ofputil_pull_ofp11_group_mod(struct ofpbuf *msg, enum ofp_version ofp_version,
     gm->command_bucket_id = OFPG15_BUCKET_ALL;
 
     error = ofputil_pull_ofp11_buckets(msg, msg->size, ofp_version,
-                                       &gm->buckets);
+                                       &gm->buckets, &gm->n_buckets);
 
     /* OF1.3.5+ prescribes an error when an OFPGC_DELETE includes buckets. */
     if (!error
         && ofp_version >= OFP13_VERSION
         && gm->command == OFPGC11_DELETE
-        && !list_is_empty(&gm->buckets)) {
+        && gm->n_buckets) {
         error = OFPERR_OFPGMFC_INVALID_GROUP;
     }
 
@@ -8621,7 +8580,7 @@ ofputil_pull_ofp15_group_mod(struct ofpbuf *msg, enum ofp_version ofp_version,
 
     bucket_list_len = ntohs(ogm->bucket_array_len);
     error = ofputil_pull_ofp15_buckets(msg, bucket_list_len, ofp_version,
-                                       gm->type, &gm->buckets);
+                                       gm->type, &gm->buckets, &gm->n_buckets);
     if (error) {
         return error;
     }
@@ -8638,7 +8597,6 @@ ofputil_decode_group_mod(const struct ofp_header *oh,
 {
     enum ofp_version ofp_version = oh->version;
     struct ofpbuf msg;
-    struct ofputil_bucket *bucket;
     enum ofperr err;
 
     ofpbuf_use_const(&msg, oh, ntohs(oh->length));
@@ -8670,7 +8628,7 @@ ofputil_decode_group_mod(const struct ofp_header *oh,
 
     switch (gm->type) {
     case OFPGT11_INDIRECT:
-        if (!list_is_singleton(&gm->buckets)) {
+        if (gm->n_buckets != 1) {
             return OFPERR_OFPGMFC_INVALID_GROUP;
         }
         break;
@@ -8689,7 +8647,7 @@ ofputil_decode_group_mod(const struct ofp_header *oh,
     case OFPGC15_INSERT_BUCKET:
         break;
     case OFPGC15_REMOVE_BUCKET:
-        if (!list_is_empty(&gm->buckets)) {
+        if (gm->n_buckets > 0) {
             return OFPERR_OFPGMFC_BAD_BUCKET;
         }
         break;
@@ -8697,7 +8655,8 @@ ofputil_decode_group_mod(const struct ofp_header *oh,
         OVS_NOT_REACHED();
     }
 
-    LIST_FOR_EACH (bucket, list_node, &gm->buckets) {
+    for (struct ofputil_bucket *bucket = gm->buckets;
+         bucket < &gm->buckets[gm->n_buckets]; bucket++) {
         if (bucket->weight && gm->type != OFPGT11_SELECT) {
             return OFPERR_OFPGMFC_INVALID_GROUP;
         }

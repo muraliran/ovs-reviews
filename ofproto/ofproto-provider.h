@@ -516,8 +516,8 @@ struct ofgroup {
     const long long int created;      /* Creation time. */
     const long long int modified;     /* Time of last modification. */
 
-    struct ovs_list buckets;        /* Contains "struct ofputil_bucket"s. */
-    const uint32_t n_buckets;
+    struct ofputil_bucket *const buckets;
+    const size_t n_buckets;
 
     const struct ofputil_group_props props;
 };

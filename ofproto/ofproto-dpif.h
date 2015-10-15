@@ -137,7 +137,8 @@ bool group_dpif_lookup(struct ofproto_dpif *ofproto, uint32_t group_id,
                        struct group_dpif **group);
 
 void group_dpif_get_buckets(const struct group_dpif *group,
-                            const struct ovs_list **buckets);
+                            struct ofputil_bucket **bucketsp,
+                            size_t *n_bucketsp);
 enum ofp11_group_type group_dpif_get_type(const struct group_dpif *group);
 const char *group_dpif_get_selection_method(const struct group_dpif *group);
 uint64_t group_dpif_get_selection_method_param(const struct group_dpif *group);

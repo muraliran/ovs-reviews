@@ -1162,6 +1162,7 @@ parse_bucket_str(struct ofputil_bucket *bucket, char *str_, uint8_t group_type,
     struct ds actions;
     char *error;
 
+    memset(bucket, 0, sizeof *bucket);
     bucket->weight = group_type == OFPGT11_SELECT ? 1 : 0;
     bucket->bucket_id = OFPG15_BUCKET_ALL;
     bucket->watch_port = OFPP_ANY;
@@ -1301,7 +1302,6 @@ parse_ofp_group_mod_str__(struct ofputil_group_mod *gm, uint16_t command,
     bool had_type = false;
     bool had_command_bucket_id = false;
     char *name;
-    struct ofputil_bucket *bucket;
     char *error = NULL;
 
     *usable_protocols = OFPUTIL_P_OF11_UP;
@@ -1337,7 +1337,6 @@ parse_ofp_group_mod_str__(struct ofputil_group_mod *gm, uint16_t command,
     gm->command = command;
     gm->group_id = OFPG_ANY;
     gm->command_bucket_id = OFPG15_BUCKET_ALL;
-    list_init(&gm->buckets);
     if (command == OFPGC11_DELETE && string[0] == '\0') {
         gm->group_id = OFPG_ALL;
         return NULL;
@@ -1351,8 +1350,7 @@ parse_ofp_group_mod_str__(struct ofputil_group_mod *gm, uint16_t command,
     char *bkt_str = strstr(string, "bucket=");
     if (bkt_str) {
         if (!(fields & F_BUCKETS)) {
-            error = xstrdup("bucket is not needed");
-            goto out;
+            return xstrdup("bucket is not needed");
         }
         *bkt_str = '\0';
     }
@@ -1364,14 +1362,12 @@ parse_ofp_group_mod_str__(struct ofputil_group_mod *gm, uint16_t command,
 
         value = strtok_r(NULL, ", \t\r\n", &save_ptr);
         if (!value) {
-            error = xasprintf("field %s missing value", name);
-            goto out;
+            return xasprintf("field %s missing value", name);
         }
 
         if (!strcmp(name, "command_bucket_id")) {
             if (!(fields & F_COMMAND_BUCKET_ID)) {
-                error = xstrdup("command bucket id is not needed");
-                goto out;
+                return xstrdup("command bucket id is not needed");
             }
             if (!strcmp(value, "all")) {
                 gm->command_bucket_id = OFPG15_BUCKET_ALL;
@@ -1382,21 +1378,19 @@ parse_ofp_group_mod_str__(struct ofputil_group_mod *gm, uint16_t command,
             } else {
                 error = str_to_u32(value, &gm->command_bucket_id);
                 if (error) {
-                    goto out;
+                    return error;
                 }
                 if (gm->command_bucket_id > OFPG15_BUCKET_MAX
                     && (gm->command_bucket_id != OFPG15_BUCKET_FIRST
                         && gm->command_bucket_id != OFPG15_BUCKET_LAST
                         && gm->command_bucket_id != OFPG15_BUCKET_ALL)) {
-                    error = xasprintf("invalid command bucket id %"PRIu32,
-                                      gm->command_bucket_id);
-                    goto out;
+                    return xasprintf("invalid command bucket id %"PRIu32,
+                                     gm->command_bucket_id);
                 }
             }
             if (gm->command_bucket_id == OFPG15_BUCKET_ALL
                 && !(fields & F_COMMAND_BUCKET_ID_ALL)) {
-                error = xstrdup("command_bucket_id=all is not permitted");
-                goto out;
+                return xstrdup("command_bucket_id=all is not permitted");
             }
             had_command_bucket_id = true;
         } else if (!strcmp(name, "group_id")) {
@@ -1405,18 +1399,15 @@ parse_ofp_group_mod_str__(struct ofputil_group_mod *gm, uint16_t command,
             } else {
                 error = str_to_u32(value, &gm->group_id);
                 if (error) {
-                    goto out;
+                    return error;
                 }
                 if (gm->group_id != OFPG_ALL && gm->group_id > OFPG_MAX) {
-                    error = xasprintf("invalid group id %"PRIu32,
-                                      gm->group_id);
-                    goto out;
+                    return xasprintf("invalid group id %"PRIu32, gm->group_id);
                 }
             }
         } else if (!strcmp(name, "type")){
             if (!(fields & F_GROUP_TYPE)) {
-                error = xstrdup("type is not needed");
-                goto out;
+                return xstrdup("type is not needed");
             }
             if (!strcmp(value, "all")) {
                 gm->type = OFPGT11_ALL;
@@ -1428,20 +1419,17 @@ parse_ofp_group_mod_str__(struct ofputil_group_mod *gm, uint16_t command,
                        !strcmp(value, "fast_failover")) {
                 gm->type = OFPGT11_FF;
             } else {
-                error = xasprintf("invalid group type %s", value);
-                goto out;
+                return xasprintf("invalid group type %s", value);
             }
             had_type = true;
         } else if (!strcmp(name, "selection_method")) {
             if (!(fields & F_GROUP_TYPE)) {
-                error = xstrdup("selection method is not needed");
-                goto out;
+                return xstrdup("selection method is not needed");
             }
             if (strlen(value) >= NTR_MAX_SELECTION_METHOD_LEN) {
-                error = xasprintf("selection method is longer than %u"
-                                  " bytes long",
-                                  NTR_MAX_SELECTION_METHOD_LEN - 1);
-                goto out;
+                return xasprintf("selection method is longer than %u"
+                                 " bytes long",
+                                 NTR_MAX_SELECTION_METHOD_LEN - 1);
             }
             memset(gm->props.selection_method, '\0',
                    NTR_MAX_SELECTION_METHOD_LEN);
@@ -1449,57 +1437,50 @@ parse_ofp_group_mod_str__(struct ofputil_group_mod *gm, uint16_t command,
             *usable_protocols &= OFPUTIL_P_OF15_UP;
         } else if (!strcmp(name, "selection_method_param")) {
             if (!(fields & F_GROUP_TYPE)) {
-                error = xstrdup("selection method param is not needed");
-                goto out;
+                return xstrdup("selection method param is not needed");
             }
             error = str_to_u64(value, &gm->props.selection_method_param);
             if (error) {
-                goto out;
+                return error;
             }
             *usable_protocols &= OFPUTIL_P_OF15_UP;
         } else if (!strcmp(name, "fields")) {
             if (!(fields & F_GROUP_TYPE)) {
-                error = xstrdup("fields are not needed");
-                goto out;
+                return xstrdup("fields are not needed");
             }
             error = parse_select_group_field(value, &gm->props.fields,
                                              usable_protocols);
             if (error) {
-                goto out;
+                return error;
             }
             *usable_protocols &= OFPUTIL_P_OF15_UP;
         } else {
-            error = xasprintf("unknown keyword %s", name);
-            goto out;
+            return xasprintf("unknown keyword %s", name);
         }
     }
     if (gm->group_id == OFPG_ANY) {
-        error = xstrdup("must specify a group_id");
-        goto out;
+        return xstrdup("must specify a group_id");
     }
     if (fields & F_GROUP_TYPE && !had_type) {
-        error = xstrdup("must specify a type");
-        goto out;
+        return xstrdup("must specify a type");
     }
 
     if (fields & F_COMMAND_BUCKET_ID) {
         if (!(fields & F_COMMAND_BUCKET_ID_ALL || had_command_bucket_id)) {
-            error = xstrdup("must specify a command bucket id");
-            goto out;
+            return xstrdup("must specify a command bucket id");
         }
     } else if (had_command_bucket_id) {
-        error = xstrdup("command bucket id is not needed");
-        goto out;
+        return xstrdup("command bucket id is not needed");
     }
 
     /* Now parse the buckets, if any. */
+    size_t allocated_buckets = 0;
     while (bkt_str) {
         char *next_bkt_str;
 
         bkt_str = strchr(bkt_str + 1, '=');
         if (!bkt_str) {
-            error = xstrdup("must specify bucket content");
-            goto out;
+            return xstrdup("must specify bucket content");
         }
         bkt_str++;
 
@@ -1508,30 +1489,29 @@ parse_ofp_group_mod_str__(struct ofputil_group_mod *gm, uint16_t command,
             *next_bkt_str = '\0';
         }
 
-        bucket = xzalloc(sizeof(struct ofputil_bucket));
+        if (gm->n_buckets >= allocated_buckets) {
+            gm->buckets = x2nrealloc(gm->buckets, &allocated_buckets,
+                                     sizeof *gm->buckets);
+        }
+
+        struct ofputil_bucket *bucket = &gm->buckets[gm->n_buckets];
         error = parse_bucket_str(bucket, bkt_str, gm->type, usable_protocols);
         if (error) {
-            free(bucket);
-            goto out;
+            return error;
         }
-        list_push_back(&gm->buckets, &bucket->list_node);
+        gm->n_buckets++;
 
         if (gm->type != OFPGT11_SELECT && bucket->weight) {
-            error = xstrdup("Only select groups can have bucket weights.");
-            goto out;
+            return xstrdup("Only select groups can have bucket weights.");
         }
 
         bkt_str = next_bkt_str;
     }
-    if (gm->type == OFPGT11_INDIRECT && !list_is_short(&gm->buckets)) {
-        error = xstrdup("Indirect groups can have at most one bucket.");
-        goto out;
+    if (gm->type == OFPGT11_INDIRECT && gm->n_buckets > 1) {
+        return xstrdup("Indirect groups can have at most one bucket.");
     }
 
     return NULL;
- out:
-    ofputil_bucket_list_destroy(&gm->buckets);
-    return error;
 }
 
 char * OVS_WARN_UNUSED_RESULT
@@ -1545,7 +1525,7 @@ parse_ofp_group_mod_str(struct ofputil_group_mod *gm, uint16_t command,
     free(string);
 
     if (error) {
-        ofputil_bucket_list_destroy(&gm->buckets);
+        ofputil_buckets_destroy(gm->buckets, gm->n_buckets);
     }
     return error;
 }
@@ -1578,14 +1558,7 @@ parse_ofp_group_mod_file(const char *file_name, uint16_t command,
         char *error;
 
         if (*n_gms >= allocated_gms) {
-            struct ofputil_group_mod *new_gms;
-            size_t i;
-
-            new_gms = x2nrealloc(*gms, &allocated_gms, sizeof **gms);
-            for (i = 0; i < *n_gms; i++) {
-                list_moved(&new_gms[i].buckets, &(*gms)[i].buckets);
-            }
-            *gms = new_gms;
+            *gms = x2nrealloc(*gms, &allocated_gms, sizeof **gms);
         }
         error = parse_ofp_group_mod_str(&(*gms)[*n_gms], command, ds_cstr(&s),
                                         &usable);
@@ -1593,7 +1566,7 @@ parse_ofp_group_mod_file(const char *file_name, uint16_t command,
             size_t i;
 
             for (i = 0; i < *n_gms; i++) {
-                ofputil_bucket_list_destroy(&(*gms)[i].buckets);
+                ofputil_buckets_destroy((*gms)[i].buckets, (*gms)[i].n_buckets);
             }
             free(*gms);
             *gms = NULL;

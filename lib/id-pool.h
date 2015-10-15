@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014 Nicira, Inc.
+ * Copyright (c) 2014, 2015 Nicira, Inc.
  * Copyright (c) 2014 Netronome.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -29,6 +29,7 @@ void id_pool_destroy(struct id_pool *);
 bool id_pool_alloc_id(struct id_pool *, uint32_t *id);
 void id_pool_free_id(struct id_pool *, uint32_t id);
 void id_pool_add(struct id_pool *, uint32_t id);
+bool id_pool_contains(const struct id_pool *, uint32_t id);
 
 /*
  * ID pool.

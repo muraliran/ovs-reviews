@@ -2884,7 +2884,7 @@ ofproto_group_unref(struct ofgroup *group)
 {
     if (group && ovs_refcount_unref(&group->ref_count) == 1) {
         group->ofproto->ofproto_class->group_destruct(group);
-        ofputil_bucket_list_destroy(&group->buckets);
+        ofputil_buckets_destroy(group->buckets, group->n_buckets);
         group->ofproto->ofproto_class->group_dealloc(group);
     }
 }
@@ -6176,7 +6176,8 @@ append_group_desc(struct ofgroup *group, struct ovs_list *replies)
     gds.type = group->type;
     gds.props = group->props;
 
-    ofputil_append_group_desc_reply(&gds, &group->buckets, replies);
+    ofputil_append_group_desc_reply(&gds, group->buckets, group->n_buckets,
+                                    replies);
 }
 
 static enum ofperr
@@ -6274,9 +6275,10 @@ init_group(struct ofproto *ofproto, struct ofputil_group_mod *gm,
     *CONST_CAST(long long int *, &((*ofgroup)->modified)) = now;
     ovs_refcount_init(&(*ofgroup)->ref_count);
 
-    list_move(&(*ofgroup)->buckets, &gm->buckets);
-    *CONST_CAST(uint32_t *, &(*ofgroup)->n_buckets) =
-        list_size(&(*ofgroup)->buckets);
+    *CONST_CAST(struct ofputil_bucket **, &(*ofgroup)->buckets) = gm->buckets;
+    *CONST_CAST(size_t *, &(*ofgroup)->n_buckets) = gm->n_buckets;
+    gm->buckets = NULL;
+    gm->n_buckets = 0;
 
     memcpy(CONST_CAST(struct ofputil_group_props *, &(*ofgroup)->props),
            &gm->props, sizeof (struct ofputil_group_props));
@@ -6284,7 +6286,7 @@ init_group(struct ofproto *ofproto, struct ofputil_group_mod *gm,
     /* Construct called BEFORE any locks are held. */
     error = ofproto->ofproto_class->group_construct(*ofgroup);
     if (error) {
-        ofputil_bucket_list_destroy(&(*ofgroup)->buckets);
+        ofputil_buckets_destroy((*ofgroup)->buckets, (*ofgroup)->n_buckets);
         ofproto->ofproto_class->group_dealloc(*ofgroup);
     }
     return error;
@@ -6332,10 +6334,17 @@ add_group(struct ofproto *ofproto, struct ofputil_group_mod *gm)
  unlock_out:
     ovs_rwlock_unlock(&ofproto->groups_rwlock);
     ofproto->ofproto_class->group_destruct(ofgroup);
-    ofputil_bucket_list_destroy(&ofgroup->buckets);
+    ofputil_buckets_destroy(ofgroup->buckets, ofgroup->n_buckets);
     ofproto->ofproto_class->group_dealloc(ofgroup);
 
     return error;
+}
+
+static void
+clone_bucket(struct ofputil_bucket *dst, const struct ofputil_bucket *src)
+{
+    *dst = *src;
+    dst->ofpacts = xmemdup(dst->ofpacts, dst->ofpacts_len);
 }
 
 /* Adds all of the buckets from 'ofgroup' to 'new_ofgroup'.  The buckets
@@ -6344,56 +6353,47 @@ add_group(struct ofproto *ofproto, struct ofputil_group_mod *gm)
  * 'command_bucket_id' values OFPG15_BUCKET_FIRST and OFPG15_BUCKET_LAST are
  * also honored. */
 static enum ofperr
-copy_buckets_for_insert_bucket(const struct ofgroup *ofgroup,
-                               struct ofgroup *new_ofgroup,
-                               uint32_t command_bucket_id)
+insert_bucket(const struct ofgroup *old, struct ofgroup *new, uint32_t id)
 {
-    struct ofputil_bucket *last = NULL;
-
-    if (command_bucket_id <= OFPG15_BUCKET_MAX) {
-        /* Check here to ensure that a bucket corresponding to
-         * command_bucket_id exists in the old bucket list.
-         *
-         * The subsequent search of below of new_ofgroup covers
-         * both buckets in the old bucket list and buckets added
-         * by the insert buckets group mod message this function processes. */
-        if (!ofputil_bucket_find(&ofgroup->buckets, command_bucket_id)) {
+    /* Find the insertion position. */
+    size_t pos;
+    if (id == OFPG15_BUCKET_LAST) {
+        pos = old->n_buckets;
+    } else if (id == OFPG15_BUCKET_FIRST) {
+        pos = 0;
+    } else {
+        const struct ofputil_bucket *b
+            = ofputil_bucket_find(old->buckets, old->n_buckets, id);
+        if (!b) {
             return OFPERR_OFPGMFC_UNKNOWN_BUCKET;
         }
-
-        if (!list_is_empty(&new_ofgroup->buckets)) {
-            last = ofputil_bucket_list_back(&new_ofgroup->buckets);
-        }
+        pos = b - old->buckets + 1;
     }
 
-    ofputil_bucket_clone_list(&new_ofgroup->buckets, &ofgroup->buckets, NULL);
+    /* Replace the buckets in 'new' by copies of the first 'pos' buckets from
+     * 'old', followed by all of the existing buckets in 'new', followed by the
+     * remaining buckets from 'old'. */
+    size_t n_buckets = old->n_buckets + new->n_buckets;
+    struct ofputil_bucket *buckets = xmalloc(sizeof *buckets * n_buckets);
+    struct ofputil_bucket *b = buckets;
 
-    if (ofputil_bucket_check_duplicate_id(&ofgroup->buckets)) {
-            VLOG_INFO_RL(&rl, "Duplicate bucket id");
-            return OFPERR_OFPGMFC_BUCKET_EXISTS;
+    for (size_t i = 0; i < pos; i++) {
+        clone_bucket(b++, &old->buckets[i]);
+    }
+    for (size_t i = 0; i < new->n_buckets; i++) {
+        *b++ = new->buckets[i];
+    }
+    for (size_t i = pos; i < old->n_buckets; i++) {
+        clone_bucket(b++, &old->buckets[i]);
     }
 
-    /* Rearrange list according to command_bucket_id */
-    if (command_bucket_id == OFPG15_BUCKET_LAST) {
-        if (!list_is_empty(&ofgroup->buckets)) {
-            struct ofputil_bucket *new_first;
-            const struct ofputil_bucket *first;
+    free(new->buckets);
+    *CONST_CAST(struct ofputil_bucket **, &new->buckets) = buckets;
+    *CONST_CAST(size_t *, &new->n_buckets) = n_buckets;
 
-            first = ofputil_bucket_list_front(&ofgroup->buckets);
-            new_first = ofputil_bucket_find(&new_ofgroup->buckets,
-                                            first->bucket_id);
-
-            list_splice(new_ofgroup->buckets.next, &new_first->list_node,
-                        &new_ofgroup->buckets);
-        }
-    } else if (command_bucket_id <= OFPG15_BUCKET_MAX && last) {
-        struct ofputil_bucket *after;
-
-        /* Presence of bucket is checked above so after should never be NULL */
-        after = ofputil_bucket_find(&new_ofgroup->buckets, command_bucket_id);
-
-        list_splice(after->list_node.next, new_ofgroup->buckets.next,
-                    last->list_node.next);
+    if (ofputil_buckets_contain_duplicate(new->buckets, new->n_buckets)) {
+        VLOG_INFO_RL(&rl, "Duplicate bucket id");
+        return OFPERR_OFPGMFC_BUCKET_EXISTS;
     }
 
     return 0;
@@ -6404,32 +6404,39 @@ copy_buckets_for_insert_bucket(const struct ofgroup *ofgroup,
  * Special 'command_bucket_id' values OFPG15_BUCKET_FIRST, OFPG15_BUCKET_LAST
  * and OFPG15_BUCKET_ALL are also honored. */
 static enum ofperr
-copy_buckets_for_remove_bucket(const struct ofgroup *ofgroup,
-                               struct ofgroup *new_ofgroup,
-                               uint32_t command_bucket_id)
+remove_bucket(const struct ofgroup *old, struct ofgroup *new, uint32_t id)
 {
-    const struct ofputil_bucket *skip = NULL;
-
-    if (command_bucket_id == OFPG15_BUCKET_ALL) {
-        return 0;
-    }
-
-    if (command_bucket_id == OFPG15_BUCKET_FIRST) {
-        if (!list_is_empty(&ofgroup->buckets)) {
-            skip = ofputil_bucket_list_front(&ofgroup->buckets);
-        }
-    } else if (command_bucket_id == OFPG15_BUCKET_LAST) {
-        if (!list_is_empty(&ofgroup->buckets)) {
-            skip = ofputil_bucket_list_back(&ofgroup->buckets);
-        }
-    } else {
-        skip = ofputil_bucket_find(&ofgroup->buckets, command_bucket_id);
-        if (!skip) {
+    /* Find the index of the bucket to be omitted from 'new'. */
+    size_t omit;
+    if (id < OFPG15_BUCKET_MAX) {
+        const struct ofputil_bucket *b
+            = ofputil_bucket_find(old->buckets, old->n_buckets, id);
+        if (!b) {
             return OFPERR_OFPGMFC_UNKNOWN_BUCKET;
         }
+        omit = b - old->buckets;
+    } else if (id == OFPG15_BUCKET_ALL) {
+        return 0;
+    } else {
+        if (!old->n_buckets) {
+            return 0;
+        }
+        omit = id == OFPG15_BUCKET_FIRST ? 0 : old->n_buckets - 1;
     }
 
-    ofputil_bucket_clone_list(&new_ofgroup->buckets, &ofgroup->buckets, skip);
+    size_t n_buckets = old->n_buckets - 1;
+    struct ofputil_bucket *buckets = xmalloc(sizeof *buckets * n_buckets);
+    struct ofputil_bucket *b = buckets;
+
+    for (size_t i = 0; i < old->n_buckets; i++) {
+        if (i != omit) {
+            clone_bucket(b++, &old->buckets[i]);
+        }
+    }
+
+    free(new->buckets);
+    *CONST_CAST(struct ofputil_bucket **, &new->buckets) = buckets;
+    *CONST_CAST(size_t *, &new->n_buckets) = n_buckets;
 
     return 0;
 }
@@ -6469,11 +6476,9 @@ modify_group(struct ofproto *ofproto, struct ofputil_group_mod *gm)
 
     /* Manipulate bucket list for bucket commands */
     if (gm->command == OFPGC15_INSERT_BUCKET) {
-        error = copy_buckets_for_insert_bucket(ofgroup, new_ofgroup,
-                                               gm->command_bucket_id);
+        error = insert_bucket(ofgroup, new_ofgroup, gm->command_bucket_id);
     } else if (gm->command == OFPGC15_REMOVE_BUCKET) {
-        error = copy_buckets_for_remove_bucket(ofgroup, new_ofgroup,
-                                               gm->command_bucket_id);
+        error = remove_bucket(ofgroup, new_ofgroup, gm->command_bucket_id);
     }
     if (error) {
         goto out;
