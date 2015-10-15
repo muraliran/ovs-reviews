@@ -7197,8 +7197,7 @@ ofputil_bucket_find(const struct ofputil_bucket buckets[], size_t n_buckets,
         return NULL;
     }
 
-    for (const struct ofputil_bucket *bucket = buckets;
-         bucket < &buckets[n_buckets]; bucket++) {
+    OFPUTIL_BUCKET_FOR_EACH_CONST (bucket, buckets, n_buckets) {
         if (bucket->bucket_id == bucket_id) {
             return CONST_CAST(struct ofputil_bucket *, bucket);
         }
@@ -7216,8 +7215,7 @@ ofputil_buckets_contain_duplicate(const struct ofputil_bucket buckets[],
     }
 
     struct id_pool *pool = id_pool_create(0, 0);
-    for (const struct ofputil_bucket *b = buckets;
-         b < &buckets[n_buckets]; b++) {
+    OFPUTIL_BUCKET_FOR_EACH_CONST (b, buckets, n_buckets) {
         if (id_pool_contains(pool, b->bucket_id)) {
             id_pool_destroy(pool);
             return true;
@@ -8380,8 +8378,7 @@ ofputil_encode_ofp15_group_mod(enum ofp_version ofp_version,
     start_ogm = b->size;
     ofpbuf_put_zeros(b, sizeof *ogm);
 
-    for (const struct ofputil_bucket *bucket = gm->buckets;
-         bucket < &gm->buckets[gm->n_buckets]; bucket++) {
+    OFPUTIL_BUCKET_FOR_EACH_CONST (bucket, gm->buckets, gm->n_buckets) {
         uint32_t bucket_id;
 
         /* Generate a bucket id if none was supplied */
@@ -8391,8 +8388,7 @@ ofputil_encode_ofp15_group_mod(enum ofp_version ofp_version,
 
                 /* Mark all bucket_ids that are present in gm
                  * as used in the pool. */
-                for (const struct ofputil_bucket *b = gm->buckets;
-                     b < &gm->buckets[gm->n_buckets]; b++) {
+                OFPUTIL_BUCKET_FOR_EACH_CONST (b, gm->buckets, gm->n_buckets) {
                     if (b->bucket_id <= OFPG15_BUCKET_MAX) {
                         id_pool_add(bucket_ids, b->bucket_id);
                     }
@@ -8655,8 +8651,7 @@ ofputil_decode_group_mod(const struct ofp_header *oh,
         OVS_NOT_REACHED();
     }
 
-    for (struct ofputil_bucket *bucket = gm->buckets;
-         bucket < &gm->buckets[gm->n_buckets]; bucket++) {
+    OFPUTIL_BUCKET_FOR_EACH_CONST (bucket, gm->buckets, gm->n_buckets) {
         if (bucket->weight && gm->type != OFPGT11_SELECT) {
             return OFPERR_OFPGMFC_INVALID_GROUP;
         }

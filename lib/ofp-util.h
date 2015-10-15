@@ -1057,6 +1057,10 @@ struct ofputil_bucket {
 
     struct bucket_counter stats;
 };
+#define OFPUTIL_BUCKET_FOR_EACH(B, BUCKETS, N_BUCKETS) \
+    for (struct ofputil_bucket *B = (BUCKETS); B < &(BUCKETS)[N_BUCKETS]; B++)
+#define OFPUTIL_BUCKET_FOR_EACH_CONST(B, BUCKETS, N_BUCKETS) \
+    for (const struct ofputil_bucket *B = (BUCKETS); B < &(BUCKETS)[N_BUCKETS]; B++)
 
 /* Protocol-independent group_mod. */
 struct ofputil_group_props {

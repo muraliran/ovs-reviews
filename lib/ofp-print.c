@@ -2375,8 +2375,7 @@ ofp_print_group(struct ds *s, uint32_t group_id, uint8_t type,
 
     ds_put_char(s, ',');
 
-    for (const struct ofputil_bucket *bucket = buckets;
-         bucket < &buckets[n_buckets]; bucket++) {
+    OFPUTIL_BUCKET_FOR_EACH_CONST (bucket, buckets, n_buckets) {
         ds_put_cstr(s, "bucket=");
 
         ofp_print_bucket_id(s, "bucket_id:", bucket->bucket_id, ofp_version);

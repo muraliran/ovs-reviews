@@ -1430,8 +1430,7 @@ group_first_live_bucket(const struct xlate_ctx *ctx,
     size_t n_buckets;
 
     group_dpif_get_buckets(group, &buckets, &n_buckets);
-    for (size_t i = 0; i < n_buckets; i++) {
-        struct ofputil_bucket *bucket = &buckets[i];
+    OFPUTIL_BUCKET_FOR_EACH (bucket, buckets, n_buckets) {
         if (bucket_is_alive(ctx, bucket, depth)) {
             return bucket;
         }
@@ -1453,8 +1452,7 @@ group_best_live_bucket(const struct xlate_ctx *ctx,
     size_t n_buckets;
 
     group_dpif_get_buckets(group, &buckets, &n_buckets);
-    for (struct ofputil_bucket *bucket = buckets;
-         bucket < &buckets[n_buckets]; bucket++) {
+    OFPUTIL_BUCKET_FOR_EACH (bucket, buckets, n_buckets) {
         if (bucket_is_alive(ctx, bucket, 0)) {
             uint32_t score = (hash_int(i, basis) & 0xffff) * bucket->weight;
             if (score >= best_score) {
@@ -3269,8 +3267,8 @@ xlate_all_group(struct xlate_ctx *ctx, struct group_dpif *group)
     size_t n_buckets;
     group_dpif_get_buckets(group, &buckets, &n_buckets);
 
-    for (size_t i = 0; i < n_buckets; i++) {
-        xlate_group_bucket(ctx, &buckets[i]);
+    OFPUTIL_BUCKET_FOR_EACH (bucket, buckets, n_buckets) {
+        xlate_group_bucket(ctx, bucket);
     }
     xlate_group_stats(ctx, group, NULL);
 }

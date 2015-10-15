@@ -4181,7 +4181,7 @@ group_construct_stats(struct group_dpif *group)
     struct ofputil_bucket *buckets;
     size_t n_buckets;
     group_dpif_get_buckets(group, &buckets, &n_buckets);
-    for (struct ofputil_bucket *b = buckets; b < &buckets[n_buckets]; b++) {
+    OFPUTIL_BUCKET_FOR_EACH (b, buckets, n_buckets) {
         b->stats.packet_count = 0;
         b->stats.byte_count = 0;
     }
@@ -4203,8 +4203,7 @@ group_dpif_credit_stats(struct group_dpif *group,
         size_t n_buckets;
 
         group_dpif_get_buckets(group, &buckets, &n_buckets);
-        for (struct ofputil_bucket *bucket = buckets;
-             bucket < &buckets[n_buckets]; bucket++) {
+        OFPUTIL_BUCKET_FOR_EACH (bucket, buckets, n_buckets) {
             bucket->stats.packet_count += stats->n_packets;
             bucket->stats.byte_count += stats->n_bytes;
         }
@@ -4254,8 +4253,7 @@ group_get_stats(const struct ofgroup *group_, struct ofputil_group_stats *ogs)
     struct ofputil_bucket *buckets;
     size_t n_buckets;
     group_dpif_get_buckets(group, &buckets, &n_buckets);
-    for (const struct ofputil_bucket *bucket = buckets;
-         bucket < &buckets[n_buckets]; bucket++) {
+    OFPUTIL_BUCKET_FOR_EACH_CONST (bucket, buckets, n_buckets) {
         bucket_stats->packet_count = bucket->stats.packet_count;
         bucket_stats->byte_count = bucket->stats.byte_count;
         bucket_stats++;
